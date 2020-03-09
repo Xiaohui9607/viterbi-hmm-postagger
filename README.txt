@@ -24,3 +24,5 @@ POS_test.words -- to run your system on.  You should produce a file in
 		submission instructions to be announced.
 
 scorer.py -- the scorer we develop to evaluate the output files
+
+HMMPOSTagger.py -- the implmentation
