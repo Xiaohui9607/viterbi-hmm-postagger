@@ -18,10 +18,10 @@ sf = ['ble', 'al', 'algia', 'an', 'ance', 'ancy', 'ant', 'tion', 'acity', 'el', 
 
 suffixes = OrderedDict(list(zip(sf, range(len(sf)))))
 
-eps = 1e-7
-alpha = 1e-4
+# for numerical statbility
+alpha = 1e-7
 
-def logdotexp(A, B):
+def logdotexp(A, B):    # log matrix multiplication
     max_A = np.max(A)
     max_B = np.max(B)
     C = np.dot(np.exp(A - max_A), np.exp(B - max_B))
@@ -45,44 +45,45 @@ class HMMPOS:
         self.suffixes = suffixes
 
     def fit(self, train_pos):
-        words, tags = self._preprocess_train(train_pos)
-        self._create_reprensentation(words, tags)
-        uni_count, bi_count = self._estimate_A_unigram_bigram(tags)
-        tri_count = self._estimate_A_trigram(tags)
-        self._estimate_B(words, tags)
-        self._estimate_C()
-        self.norm_w = self._delete_interpolation(uni_count, bi_count, tri_count)
+        words, tags = self._preprocess_train(train_pos) # preprocess text and split words and tags
+        self._create_reprensentation(words, tags)       # create POS and VOCAB dictionary (look up table)
+        uni_count, bi_count = self._estimate_A_unigram_bigram(tags) # estimate unigram and bigram transition matrix
+        tri_count = self._estimate_A_trigram(tags)      # estimate trigram transition matrix
+        self._estimate_B(words, tags)   # estimate token emission matrix
+        self._estimate_C()              # estimate suffix emission matrix (used to process unknown word statiscally)
+        self.norm_w = self._delete_interpolation(uni_count, bi_count, tri_count)    # weighting unigram, bigram and trigram
+        # combine 3 matrixes together
         self.A_bigram = ((self.norm_w[1] * self.A_bigram).T + self.norm_w[0] * self.A_unigram).T
         self.A_trigram = (self.norm_w[2] * self.A_trigram.transpose([1, 0, 2]) + self.A_bigram).transpose([1, 0, 2])
         self.A_trigram = np.log(self.A_trigram)
         self.A_bigram = np.log(self.A_bigram)
-        self.B = np.log(self.B+eps)
-        self.C = np.log(self.C+eps)
-        self.pi_index = self.tag['.']
+        self.B = np.log(self.B+alpha)
+        self.C = np.log(self.C+alpha)
+        self.pi_index = self.tag['.']   # pi probabilities as indicated in the textbook
 
-    def predict(self, test_words, out=None):
-        in_sentences, wr_sentences = self._preprocess_test(test_words)
+    def predict(self, test_words, outfile=None):
+        pr_sentences, wr_sentences = self._preprocess_test(test_words)  # preprocess text, one for predicte, one for writing into file
         outs = []
-        for sentence in in_sentences:
+        for sentence in pr_sentences:   # make prediction
             if sentence:
                 outs.append(self._vertibi(sentence))
-        if out:
-            with open(out, 'w') as f:
-                for in_sentence, wr_sentence, tags in zip(in_sentences, wr_sentences, outs):
-                    for idx, (in_word, wr_word, tag) in enumerate(zip(in_sentence, wr_sentence, tags)):
-                        tag = self._postprocess_word(in_word, wr_word, tag)
+        if outfile:                     # write into file
+            with open(outfile, 'w') as f:
+                for pr_sentence, wr_sentence, tags in zip(pr_sentences, wr_sentences, outs):
+                    for idx, (pr_word, wr_word, tag) in enumerate(zip(pr_sentence, wr_sentence, tags)):
+                        tag = self._postprocess_unknown(pr_word, wr_word, tag)
                         f.write("%s\t%s\n" % (wr_word, tag))
                     f.write("\n")
                 f.close()
 
     def _preprocess_test(self, test_words):
         text = open(test_words).read()
-        in_text = self._text_regex(text)
-        in_sentences = in_text.split('\n\n')
-        in_sentences = [sentence.split() for sentence in in_sentences]
+        pr_text = self._text_regex(text)
+        pr_sentences = pr_text.split('\n\n')
+        pr_sentences = [sentence.split() for sentence in pr_sentences]
         wr_sentences = text.split('\n\n')
         wr_sentences = [sentence.split() for sentence in wr_sentences]
-        return in_sentences, wr_sentences
+        return pr_sentences, wr_sentences
 
     def _preprocess_train(self, train_pos):
         text = open(train_pos).read()
@@ -103,7 +104,7 @@ class HMMPOS:
         return text
 
     def _estimate_A_trigram(self, tags):
-        count_numerator = np.ones((self.tag_size, self.tag_size, self.tag_size))  * alpha  # A -> [target, given1, given2]
+        count_numerator = np.ones((self.tag_size, self.tag_size, self.tag_size)) * alpha  # A -> [target, given1, given2]
         count_denominator = np.ones((self.tag_size, self.tag_size)) * self.tag_size ** 2 * alpha
         for t_i in range(len(tags)-2):
             t_given_1, t_given_2 = tags[t_i:t_i+2]
@@ -114,8 +115,8 @@ class HMMPOS:
         return count_numerator
 
     def _estimate_A_unigram_bigram(self, tags):
-        count_numerator = np.ones((self.tag_size, self.tag_size))   * alpha    # A -> [target, given2]
-        count_denominator = np.ones(self.tag_size) * self.tag_size  * alpha
+        count_numerator = np.ones((self.tag_size, self.tag_size)) * alpha    # A -> [target, given2]
+        count_denominator = np.ones(self.tag_size) * self.tag_size * alpha
         for t_i in range(len(tags)-1):
             t_given = tags[t_i]
             t_target = tags[t_i+1]
@@ -134,22 +135,22 @@ class HMMPOS:
         self.B = (count_numerator.T / count_denominator).T
 
     def _vertibi(self, sentence):
-        V = np.zeros((self.tag_size, len(sentence)))
-        BP = np.zeros_like(V, dtype=np.int)
-        bo = self.B[:, self.vocab[sentence[0]]] if sentence[0] in self.vocab else self._process_unknown(sentence[0])
-        V[:, 0] = self.A_bigram[:, self.pi_index] + bo
+        V = np.zeros((self.tag_size, len(sentence)))            # probability table
+        BP = np.zeros_like(V, dtype=np.int)                     # back pointer table
+        emiss_prob = self.B[:, self.vocab[sentence[0]]] if sentence[0] in self.vocab else self._process_unknown(sentence[0])    # emission prob
+        V[:, 0] = self.A_bigram[:, self.pi_index] + emiss_prob          # log(emission prob * transition prob)
         for w_i, word in enumerate(sentence[1:], start=1):
-            bo = self.B[:, self.vocab[word]] if word in self.vocab else self._process_unknown(word)
+            emiss_prob = self.B[:, self.vocab[word]] if word in self.vocab else self._process_unknown(word)     # emission prob
             if w_i == 1:
                 trans_prob = self.A_bigram + V[:, w_i-1]
             else:
                 trans_prob = np.max(self.A_trigram + logdotexp(V[:, w_i-2:w_i-1], V[:, w_i-1:w_i].T), axis=1)
-            t = np.max(trans_prob.T + bo, axis=0).T
-            V[:, w_i] = t
-            BP[:, w_i] = np.argmax(trans_prob.T + bo, axis=0).T
+            t = np.max(trans_prob.T + emiss_prob, axis=0).T             # log(emission prob * transition prob)
+            V[:, w_i] = t                                               # track tables
+            BP[:, w_i] = np.argmax(trans_prob.T + emiss_prob, axis=0).T
         BPp = np.argmax(V[:, -1])
         path = []
-        for i in range(len(sentence) - 1, -1, -1):
+        for i in range(len(sentence) - 1, -1, -1):                      # back track tables
             path.append(BPp)
             BPp = BP[BPp, i]
         path.reverse()
@@ -167,7 +168,7 @@ class HMMPOS:
         return list(self.tag.keys())[index].upper()
 
     def _delete_interpolation(self, uni_count, bi_count, tri_count):
-        lambda1 = lambda2 = lambda3 = 0
+        weight = np.zeros(3)
         for t_target in self.tag.values():
             for t_given_1 in self.tag.values():
                 for t_given_2 in self.tag.values():
@@ -186,46 +187,39 @@ class HMMPOS:
                         except ZeroDivisionError:
                             c3 = 0
                         k = np.argmax([c1, c2, c3])
-                        if k == 0:
-                            lambda3 += v
-                        if k == 1:
-                            lambda2 += v
-                        if k == 2:
-                            lambda1 += v
+                        weight[2-k] += v
+        weight /= np.sum(weight)
+        return weight
 
-        weights = [lambda1, lambda2, lambda3]
-        norm_w = [float(a) / sum(weights) for a in weights]
-        return norm_w
-
-    def _postprocess_word(self, in_word, wr_word, tag):
+    def _postprocess_unknown(self, pr_word, wr_word, tag):
         if wr_word not in self.vocab:
-            if in_word == '$$cap$$':
+            if pr_word == '$$cap$$':
                 tag = 'NNP'
                 if wr_word.lower() in self.vocab:
                     if np.argmax(self.B[:, self.vocab[wr_word.lower()]]) == self.tag['nns']:
                         tag = 'NNPS'
-            elif in_word.endswith('es'):
-                if in_word[:-2] in self.vocab:
-                    max_prob_tag = np.argmax(self.B[:, self.vocab[in_word[:-2].lower()]])
+            elif pr_word.endswith('es'):
+                if pr_word[:-2] in self.vocab:
+                    max_prob_tag = np.argmax(self.B[:, self.vocab[pr_word[:-2].lower()]])
                     if max_prob_tag == self.tag['nn']:
                         tag = 'NNS'
                     elif max_prob_tag == self.tag['vb']:
                         tag = 'VBZ'
-            elif in_word.endswith('s'):
-                if in_word[:-1] in self.vocab:
-                    max_prob_tag = np.argmax(self.B[:, self.vocab[in_word[:-1].lower()]])
+            elif pr_word.endswith('s'):
+                if pr_word[:-1] in self.vocab:
+                    max_prob_tag = np.argmax(self.B[:, self.vocab[pr_word[:-1].lower()]])
                     if max_prob_tag == self.tag['nn']:
                         tag = 'NNS'
                     elif max_prob_tag == self.tag['vb']:
                         tag = 'VBZ'
-            elif in_word.endswith('ing'):
-                if in_word[:-3] in self.vocab:
-                    max_prob_tag = np.argmax(self.B[:, self.vocab[in_word[:-3].lower()]])
+            elif pr_word.endswith('ing'):
+                if pr_word[:-3] in self.vocab:
+                    max_prob_tag = np.argmax(self.B[:, self.vocab[pr_word[:-3].lower()]])
                     if max_prob_tag == self.tag['vb']:
                         tag = 'VBG'
-            elif in_word.endswith('ed'):
-                if in_word[:-2] in self.vocab:
-                    max_prob_tag = np.argmax(self.B[:, self.vocab[in_word[:-2].lower()]])
+            elif pr_word.endswith('ed'):
+                if pr_word[:-2] in self.vocab:
+                    max_prob_tag = np.argmax(self.B[:, self.vocab[pr_word[:-2].lower()]])
                     if max_prob_tag == self.tag['vb']:
                         tag = 'VBD'
         return tag
@@ -239,7 +233,7 @@ class HMMPOS:
                     suf = k
             if suf:
                 self.C[:, self.suffixes[suf]] += self.B[:, self.vocab[word]]
-        self.C = (self.C.T / (np.sum(self.C.T, axis=0)+eps)).T
+        self.C = (self.C.T / (np.sum(self.C.T, axis=0)+alpha)).T
 
     def _process_unknown(self, word):
         suf = ''
@@ -253,9 +247,9 @@ class HMMPOS:
 
 if __name__ == '__main__':
     train_path = "./POS/POS_train.pos"
-    test_words = './POS/POS_dev.words'
+    test_words = './POS/POS_test.words'
     hmm = HMMPOS()
     hmm.fit(train_pos=train_path)
-    hmm.predict(test_words=test_words, out="POS_dev.pred")
+    hmm.predict(test_words=test_words, outfile="POS_test.pos")
 
 
