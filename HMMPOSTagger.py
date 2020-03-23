@@ -18,7 +18,7 @@ sf = ['ble', 'al', 'algia', 'an', 'ance', 'ancy', 'ant', 'tion', 'acity', 'el', 
 
 suffixes = OrderedDict(list(zip(sf, range(len(sf)))))
 
-# for numerical statbility
+# for numerical stability
 alpha = 1e-7
 
 def logdotexp(A, B):    # log matrix multiplication
@@ -50,7 +50,7 @@ class HMMPOS:
         uni_count, bi_count = self._estimate_A_unigram_bigram(tags) # estimate unigram and bigram transition matrix
         tri_count = self._estimate_A_trigram(tags)      # estimate trigram transition matrix
         self._estimate_B(words, tags)   # estimate token emission matrix
-        self._estimate_C()              # estimate suffix emission matrix (used to process unknown word statiscally)
+        self._estimate_C()              # estimate suffix emission matrix (used to process unknown word statistically)
         self.norm_w = self._delete_interpolation(uni_count, bi_count, tri_count)    # weighting unigram, bigram and trigram
         # combine 3 matrixes together
         self.A_bigram = ((self.norm_w[1] * self.A_bigram).T + self.norm_w[0] * self.A_unigram).T
@@ -104,7 +104,7 @@ class HMMPOS:
         return text
 
     def _estimate_A_trigram(self, tags):
-        count_numerator = np.ones((self.tag_size, self.tag_size, self.tag_size)) * alpha  # A -> [target, given1, given2]
+        count_numerator = np.ones((self.tag_size, self.tag_size, self.tag_size)) * alpha  # A -> [target, given2, given1]
         count_denominator = np.ones((self.tag_size, self.tag_size)) * self.tag_size ** 2 * alpha
         for t_i in range(len(tags)-2):
             t_given_1, t_given_2 = tags[t_i:t_i+2]
